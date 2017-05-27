@@ -1,0 +1,1759 @@
+---
+title: "PREDICT 422 Final Project"
+author: "Christina Macholan"
+output: html_document
+---
+
+## OBJECTIVE
+A charitable organization wishes to develop a machine learning model to improve the cost-effectiveness of their direct marketing campaigns to previous donors.
+
+1) Develop a classification model using data from the most recent campaign that can effectively capture likely donors so that the expected net profit is maximized.
+
+2) Develop a prediction model to predict donation amounts for donors - the data for this will consist of the records for donors only.
+
+## DATA PREPARATION
+
+Load the Charity.csv data file.
+
+```{r}
+charity <- read.csv("charity.csv") # load the "charity.csv" file
+```
+
+Apply transformations to the predictors that will be used in both classification and regression models.
+
+```{r}
+charity.t <- charity
+charity.t$chld_yes <- as.integer(charity.t$chld > 0) # binary variable for donors with children vs. not
+charity.t$rr <- log((charity.t$tgif / charity.t$npro)*(1/charity.t$agif)) # pseudo "response-rate" (est. # of gifts / # of promos received)
+charity.t$app <- log(charity.t$tgif / charity.t$npro) # avg. amount given per promo received
+charity.t$h_tdon <- as.integer(charity.t$tdon >= 24) # binary variable for donors with no gift in over 1 yr
+charity.t$h_tlag <- as.integer(charity.t$tlag >= 10) # binary variable for donors with high lag between 1st and 2nd gift
+charity.t$h_rgif <- as.integer(charity.t$rgif > 50) # binary variable for donors with > $100 recent gift
+charity.t$h_tgif <- as.integer(charity.t$tgif > 450) # binary variable for donors with > $500 in total gifts
+charity.t$h_lgif <- as.integer(charity.t$lgif > 175) # binary variable for donors with > $200 largest gift
+charity.t$h_agif <- as.integer(charity.t$agif > 30) # binary variable for donors with > $50 average gift
+charity.t$h_incm <- as.integer(charity.t$incm > 125) # binary variable for highest avg income 
+charity.t$h_inca <- as.integer(charity.t$inca > 125) # binary variable for highest median income
+charity.t$h_plow <- as.integer(charity.t$plow > 60) # binary bariable for highest % low income
+charity.t$l_tlag <- as.integer(charity.t$tlag <= 2) # binary variable for lowest lag time between 1st and 2nd gifts
+charity.t$l_tdon <- as.integer(charity.t$tdon <= 6) # binary variable for lowest time since last donation
+charity.t$avhv <- log(charity.t$avhv+1) # log transformation to normalize skewed distribution
+charity.t$incm <- log(charity.t$incm+1) # log transformation to normalize skewed distribution
+charity.t$inca <- log(charity.t$inca+1) # log transformation to normalize skewed distribution
+charity.t$plow <- log(charity.t$plow+1) # log transformation to normalize skewed distribution
+charity.t$npro <- log(charity.t$npro+1) # log transformation to normalize skewed distribution
+charity.t$tgif <- log(charity.t$tgif+1) # log transformation to normalize skewed distribution
+charity.t$lgif <- log(charity.t$lgif+1) # log transformation to normalize skewed distribution
+charity.t$rgif <- log(charity.t$rgif+1) # log transformation to normalize skewed distribution
+charity.t$agif <- log(charity.t$agif+1) # log transformation to normalize skewed distribution
+```
+
+Set up the transformed data for analysis.
+
+```{r}
+data.train <- charity.t[charity$part=="train",]
+x.train <- data.train[,c(2:21,25:38)]
+c.train <- data.train[,22] # donr
+n.train.c <- length(c.train) # 3984
+y.train <- data.train[c.train==1,23] # damt for observations with donr=1
+n.train.y <- length(y.train) # 1995
+
+data.valid <- charity.t[charity$part=="valid",]
+x.valid <- data.valid[,c(2:21,25:38)]
+c.valid <- data.valid[,22] # donr
+n.valid.c <- length(c.valid) # 2018
+y.valid <- data.valid[c.valid==1,23] # damt for observations with donr=1
+n.valid.y <- length(y.valid) # 999
+
+data.test <- charity.t[charity$part=="test",]
+n.test <- dim(data.test)[1] # 2007
+x.test <- data.test[,c(2:21,25:38)]
+
+x.train.mean <- apply(x.train, 2, mean)
+x.train.sd <- apply(x.train, 2, sd)
+x.train.std <- t((t(x.train)-x.train.mean)/x.train.sd) # standardize to have zero mean and unit sd
+apply(x.train.std, 2, mean) # check zero mean
+apply(x.train.std, 2, sd) # check unit sd
+data.train.std.c <- data.frame(x.train.std, donr=c.train) # to classify donr
+data.train.std.y <- data.frame(x.train.std[c.train==1,], damt=y.train) # to predict damt when donr=1
+
+x.valid.std <- t((t(x.valid)-x.train.mean)/x.train.sd) # standardize using training mean and sd
+data.valid.std.c <- data.frame(x.valid.std, donr=c.valid) # to classify donr
+data.valid.std.y <- data.frame(x.valid.std[c.valid==1,], damt=y.valid) # to predict damt when donr=1
+
+x.test.std <- t((t(x.test)-x.train.mean)/x.train.sd) # standardize using training mean and sd
+data.test.std <- data.frame(x.test.std)
+```
+
+******
+## DATA EXPLORATION 
+
+Explore the relationship between the predictor variables and DONR (whether someone has donated or not).
+
+```{r, echo=FALSE}
+summary(data.train)
+
+par(mfrow=c(2,2))
+plot(as.factor(data.train$donr),as.factor(data.train$reg1), xlab="Non-Donor (0)   |   Donor (1)", ylab="Non-Reg1 (0)   |   Reg1 (1)", main="Region 1")
+plot(as.factor(data.train$donr),as.factor(data.train$reg2), xlab="Non-Donor (0)   |   Donor (1)", ylab="Non-Reg2 (0)   |   Reg2 (1)", main="Region 2")
+plot(as.factor(data.train$donr),as.factor(data.train$reg3), xlab="Non-Donor (0)   |   Donor (1)", ylab="Non-Reg3 (0)   |   Reg3 (1)", main="Region 3")
+plot(as.factor(data.train$donr),as.factor(data.train$reg4), xlab="Non-Donor (0)   |   Donor (1)", ylab="Non-Reg4 (0)   |   Reg4 (1)", main="Region 4")
+
+par(mfrow=c(3,2))
+plot(as.factor(data.train$donr),as.factor(data.train$home), xlab="Non-Donor (0)   |   Donor (1)", ylab="Non-Homeowner (0)   |   Homeowner (1)", main="Homeownership")
+plot(as.factor(data.train$donr),as.factor(data.train$chld), xlab="Non-Donor (0)   |   Donor (1)", ylab="No Children (0)    |    Has CHildren (1)", main="Has Children")
+plot(as.factor(data.train$donr),as.factor(data.train$chld_yes), xlab="Non-Donor (0)   |   Donor (1)", ylab="Number of Children", main="Number of Children")
+plot(as.factor(data.train$donr),as.factor(data.train$hinc), xlab="Non-Donor (0)   |   Donor (1)", ylab="Household Income Category", main="Household Income")
+plot(as.factor(data.train$donr),as.factor(data.train$genf), xlab="Non-Donor (0)   |   Donor (1)", ylab="Male (0)   |   Female (1)", main="Gender")
+plot(as.factor(data.train$donr),as.factor(data.train$wrat), xlab="Non-Donor (0)   |   Donor (1)", ylab="Wealth Rating", main="Wealth Rating")
+plot(as.factor(data.train$donr),as.factor(data.train$h_tdon), xlab="Non-Donor (0)   |   Donor (1)", ylab=">24 mths since Donation", main=">24 mths since Donation")
+plot(as.factor(data.train$donr),as.factor(data.train$h_tlag), xlab="Non-Donor (0)   |   Donor (1)", ylab=">10 mths btwn 1st & 2nd Donation", main=">10 mths btwn 1st & 2nd Donation")
+plot(as.factor(data.train$donr),as.factor(data.train$h_tgif), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$450 Total Gifts", main=">$500 Total Gifts")
+plot(as.factor(data.train$donr),as.factor(data.train$h_rgif), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$50 Recent Gift", main=">$100 Recent Gift")
+plot(as.factor(data.train$donr),as.factor(data.train$h_lgif), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$175 Largest Gift", main=">$175 Largest Gift")
+plot(as.factor(data.train$donr),as.factor(data.train$h_agif), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$30 Average Gift", main=">$30 Average Gift")
+plot(as.factor(data.train$donr),as.factor(data.train$h_incm), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$125K Median Income", main=">$125K Median Income")
+plot(as.factor(data.train$donr),as.factor(data.train$h_inca), xlab="Non-Donor (0)   |   Donor (1)", ylab=">$125K Avg Income", main=">$125K Avg Income")
+plot(as.factor(data.train$donr),as.factor(data.train$h_plow), xlab="Non-Donor (0)   |   Donor (1)", ylab=">60% Low Income Neighborhood", main=">60% Low Income Neighborhood")
+plot(as.factor(data.train$donr),as.factor(data.train$l_tdon), xlab="Non-Donor (0)   |   Donor (1)", ylab="<2 Mths Bewteen 1st & 2nd Donation", main="<2 Mths Bewteen 1st & 2nd Donation")
+plot(as.factor(data.train$donr),as.factor(data.train$l_tlag), xlab="Non-Donor (0)   |   Donor (1)", ylab="<6 Mths Since Last Donation", main="<6 Mths Since Last Donation")
+
+par(mfrow=c(3,4))
+boxplot(data.train$avhv~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Average Home Value", main="Average Home Value")
+boxplot(data.train$incm~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Median Family Income", main="Median Family Income")
+boxplot(data.train$inca~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Average Family Income", main="Average Family Income")
+boxplot(data.train$plow~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Percent “Low Income”", main="Percent “Low Income”")
+boxplot(data.train$tgif~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Amt. of Lifetime Gifts", main="Amt. of Lifetime Gifts")
+boxplot(data.train$lgif~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Amt. of Largest Gifts", main="Amt. of Largest Gift")
+boxplot(data.train$rgif~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Amt. of Recent Gifts", main="Amt. of Recent Gift")
+boxplot(data.train$agif~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Avg. Amt of Gifts", main="Avg. Amt of Gifts")
+boxplot(data.train$tdon~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Months Since Donation", main="Months Since Donation")
+boxplot(data.train$tlag~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Months btwn 1st & 2nd Gifts", main="Months btwn 1st & 2nd Gifts")
+boxplot(data.train$rr~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Promo Response Rate", main="Promo Response Rate")
+boxplot(data.train$app~data.train$donr, xlab="Non-Donor (0)   |   Donor (1)", ylab="Average Amt per Promotion", main="Average Amt per Promotion")
+```
+
+Explore the relationship between the predictor variables and DAMT (the amount donated).
+
+```{r, echo=FALSE}
+par(mfrow=c(2,2))
+boxplot(data.train.std.y$damt~data.train.std.y$reg1, xlab="Donation Amt", ylab="Non-Reg1 (0)   |   Reg1 (1)", main="Region 1")
+boxplot(data.train.std.y$damt~data.train.std.y$reg2, xlab="Donation Amt", ylab="Non-Reg2 (0)   |   Reg2 (1)", main="Region 2")
+boxplot(data.train.std.y$damt~data.train.std.y$reg3, xlab="Donation Amt", ylab="Non-Reg3 (0)   |   Reg3 (1)", main="Region 3")
+boxplot(data.train.std.y$damt~data.train.std.y$reg4, xlab="Donation Amt", ylab="Non-Reg4 (0)   |   Reg4 (1)", main="Region 4")
+
+par(mfrow=c(3,4))
+boxplot(data.train.std.y$damt~data.train.std.y$home, xlab="Donation Amt", ylab="Non-Homeowner (0)   |   Homeowner (1)", main="Homeownership")
+boxplot(data.train.std.y$damt~data.train.std.y$chld_yes, xlab="Donation Amt", ylab="No Children (0)    |    Has Children (1)", main="Has Children")
+boxplot(data.train.std.y$damt~data.train.std.y$chld, xlab="Donation Amt", ylab="Number of Children", main="Number of Children")
+boxplot(data.train.std.y$damt~data.train.std.y$hinc, xlab="Donation Amt", ylab="Household Income Category", main="Household Income")
+boxplot(data.train.std.y$damt~data.train.std.y$genf, xlab="Donation Amt", ylab="Male (0)   |   Female (1)", main="Gender")
+boxplot(data.train.std.y$damt~data.train.std.y$wrat, xlab="Donation Amt", ylab="Wealth Rating", main="Wealth Rating")
+boxplot(data.train.std.y$damt~data.train.std.y$h_tgif, xlab="Donation Amt", ylab=">$450 Total Gifts", main=">$500 Total Gifts")
+boxplot(data.train.std.y$damt~data.train.std.y$h_rgif, xlab="Donation Amt", ylab=">$50 Recent Gift", main=">$100 Recent Gift")
+boxplot(data.train.std.y$damt~data.train.std.y$h_lgif, xlab="Donation Amt", ylab=">$175 Largest Gift", main=">$175 Largest Gift")
+boxplot(data.train.std.y$damt~data.train.std.y$h_agif, xlab="Donation Amt", ylab=">$30 Average Gift", main=">$30 Average Gift")
+boxplot(data.train.std.y$damt~data.train.std.y$h_incm, xlab="Donation Amt", ylab=">$125K Median Income", main=">$125K Median Income")
+boxplot(data.train.std.y$damt~data.train.std.y$h_inca, xlab="Donation Amt", ylab=">$125K Avg Income", main=">$125K Avg Income")
+boxplot(data.train.std.y$damt~data.train.std.y$h_plow, xlab="Donation Amt", ylab=">60% Low Income Neighborhood", main=">60% Low Income Neighborhood")
+boxplot(data.train.std.y$damt~data.train.std.y$h_tdon, xlab="Donation Amt", ylab=">24 mths since Donation", main=">24 mths since Donation")
+boxplot(data.train.std.y$damt~data.train.std.y$h_tlag, xlab="Donation Amt", ylab=">10 mths btwn 1st & 2nd Donation", main=">10 mths btwn 1st & 2nd Donation")
+boxplot(data.train.std.y$damt~data.train.std.y$l_tdon, xlab="Donation Amt", ylab="<2 Mths Bewteen 1st & 2nd Donation", main="<2 Mths Bewteen 1st & 2nd Donation")
+boxplot(data.train.std.y$damt~data.train.std.y$l_tlag, xlab="Donation Amt", ylab="<6 Mths Since Last Donation", main="<6 Mths Since Last Donation")
+
+par(mfrow=c(3,4))
+plot(data.train.std.y$damt~data.train.std.y$avhv, xlab="Donation Amt", ylab="Average Home Value", main="Average Home Value")
+plot(data.train.std.y$damt~data.train.std.y$incm, xlab="Donation Amt", ylab="Median Family Income", main="Median Family Income")
+plot(data.train.std.y$damt~data.train.std.y$inca, xlab="Donation Amt", ylab="Average Family Income", main="Average Family Income")
+plot(data.train.std.y$damt~data.train.std.y$plow, xlab="Donation Amt", ylab="Percent “Low Income”", main="Percent “Low Income”")
+plot(data.train.std.y$damt~data.train.std.y$tgif, xlab="Donation Amt", ylab="Amt. of Lifetime Gifts", main="Amt. of Lifetime Gifts")
+plot(data.train.std.y$damt~data.train.std.y$lgif, xlab="Donation Amt", ylab="Amt. of Largest Gifts=", main="Amt. of Largest Gift")
+plot(data.train.std.y$damt~data.train.std.y$rgif, xlab="Donation Amt", ylab="Amt. of Recent Gifts", main="Amt. of Recent Gift")
+plot(data.train.std.y$damt~data.train.std.y$agif, xlab="Donation Amt", ylab="Avg. Amt. of Gifts", main="Avg. Amt. of Recent Gift")
+plot(data.train.std.y$damt~data.train.std.y$tdon, xlab="Donation Amt", ylab="Months Since Donation", main="Months Since Donation")
+plot(data.train.std.y$damt~data.train.std.y$tlag, xlab="Donation Amt", ylab="Months btwn 1st & 2nd Gifts", main="Months btwn 1st & 2nd Gifts")
+plot(data.train.std.y$damt~data.train.std.y$rr, xlab="Donation Amt", ylab="Promo Response Rate", main="Promo Response Rate")
+plot(data.train.std.y$damt~data.train.std.y$app, xlab="Donation Amt", ylab="Average Amt per Promotion", main="Average Amt per Promotion")
+
+pairs(damt~tgif+lgif+rgif+agif+tlag+tdon+plow+incm+inca+avhv+rr+app,data=data.train.std.y)
+cor(data.valid.std.y)>=.65
+cor(data.valid.std.y)<=-.65
+cor(data.valid.std.y)
+```
+
+******
+## BUILD CLASSIFICATION MODELS
+
+Create functions to simplify model performance evalutation on validation data. 
+* $14.50 expected profit if a response is received
+* $2 cost per mailing sent
+
+```{r}
+my.profit.function <- function(pred, valid) {
+    profit <- cumsum(14.5*valid[order(pred, decreasing=T)]-2)
+    plot(profit) # see how profits change as more mailings are made
+    n.mail.valid <- which.max(profit) # number of mailings that maximizes profits
+    cutoff <- sort(pred, decreasing=T)[n.mail.valid+1] # set cutoff based on n.mail.valid
+    chat.valid <- ifelse(pred>cutoff, 1, 0) # mail to everyone above the cutoff
+    return(list(N_Mail = n.mail.valid, Max_Profit = max(profit), Confusion_Matrix = table(chat.valid, valid)))
+}
+
+my.profit.function.2 <- function(pred, valid) {
+    profit <- cumsum(14.5*valid[order(pred, decreasing=T)]-2)
+    plot(profit) # see how profits change as more mailings are made
+    n.mail.valid <- which.max(profit) # number of mailings that maximizes profits
+    chat.valid <- ifelse(pred==1, 1, 0) # mail to everyone above the cutoff
+    return(list(N_Mail = n.mail.valid, Max_Profit = max(profit), Confusion_Matrix = table(chat.valid, valid)))
+}
+```
+
+### Classification Trees
+Use a simple classification tree to understand influential predictors and look for potential interaction effects. Variables included in the tree should be included in the final model.
+
+```{r}
+# load necessary libraries
+library(tree)
+library(ISLR)
+
+#####################################
+### Classification Tree - Model 1 ###
+#####################################
+
+par(mfrow=c(1,1))
+# create the model using the training data set
+data.train.std.c.2 <- data.train.std.c
+data.train.std.c.2$donr <- as.factor(data.train.std.c.2$donr)
+model.ctree1 <- tree(donr ~ . + I(hinc^2) + I(wrat^2), data.train.std.c.2)
+
+# review model summary statistics
+summary(model.ctree1)
+plot(model.ctree1)
+text(model.ctree1,pretty=0)
+model.ctree1
+
+# predict outcomes for the validation  set
+pred.valid.ctree1 <- predict(model.ctree1, data.valid.std.c, type="class")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.ctree1 <- my.profit.function.2(pred.valid.ctree1,c.valid)
+my.data.ctree1
+
+#####################################
+### Classification Tree - Model 2 ###
+#####################################
+
+set.seed(1)
+model.ctree.cv1 <- cv.tree(model.ctree1, FUN=prune.misclass)
+
+# review model summary statistics
+model.ctree.cv1
+par(mfrow=c(1,2))
+plot(model.ctree.cv1$size, model.ctree.cv1$dev, type="b")
+plot(model.ctree.cv1$k, model.ctree.cv1$dev, type="b")
+prune.model.ctree1 <- prune.misclass(model.ctree1,best=9)
+plot(prune.model.ctree1)
+text(prune.model.ctree1,pretty=0)
+
+# predict outcomes for the validation  set
+pred.valid.ctree2 <- predict(prune.model.ctree1,data.valid.std.c,type="class")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.ctree2 <- my.profit.function.2(pred.valid.ctree2,c.valid)
+my.data.ctree2
+
+######################
+### Compare Models ###
+######################
+
+class.ctree.results <- cbind(my.data.ctree1, my.data.ctree2)
+class.ctree.results
+```
+
+### The Lasso Method for Variable Selection
+
+Use the Lasso method to do variable selection for Logistic Regression, LDA, QDA, and GLM models.
+
+```{r}
+# load necessary libraries
+library(glmnet)
+
+#######################
+### Lasso - Model 1 ###
+#######################
+
+x=model.matrix(donr~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2),data.train.std.c)[,-1]
+y=data.train.std.c$donr
+grid=10^seq(10,-2,length=100)
+
+model.lasso1 <- glmnet(x, y, alpha=1, lambda=grid)
+plot(model.lasso1)
+
+set.seed(1)
+cv.out=cv.glmnet(x, y,alpha=1)
+plot(cv.out)
+bestlam=cv.out$lambda.min
+x.valid.std.2 <- cbind(x.valid.std, I(data.valid.std.c$hinc^2), I(data.valid.std.c$wrat^2), data.valid.std.c$reg2*data.valid.std.c$wrat, data.valid.std.c$chld*I(data.valid.std.c$hinc^2))
+lasso.pred=predict(model.lasso1,s=bestlam,newx=x.valid.std.2)
+mean((lasso.pred-c.valid)^2)
+out=glmnet(x,y,alpha=1,lambda=grid)
+lasso.coef=predict(out,type="coefficients",s=bestlam)[1:39,]
+lasso.coef
+lasso.coef[lasso.coef!=0]
+
+# predict outcomes for the validation  set
+post.valid.lasso1 <- predict(model.lasso1,s=bestlam,newx=x.valid.std.2)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.lasso1 <- my.profit.function(post.valid.lasso1,c.valid)
+my.data.lasso1
+
+class.lasso.results <- cbind(my.data.lasso1)
+class.lasso.results
+```
+
+### Best Subset Variables Selection
+
+Use the Best Subset method to do variable selection for Logistic Regression, LDA, QDA, and GLM models.
+
+```{r}
+# load necessary libraries
+library(leaps)
+
+#######################################
+### Best Subset Selection - Model 1 ###
+#######################################
+
+# create the model using the training data set
+model.classsub1 <- regsubsets(donr~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2), data.train.std.c, nvmax = 38)
+
+# review model summary statistics
+reg.summary <- summary(model.classsub1)
+reg.summary
+
+# predict outcomes for the validation  set
+predict.regsubsets=function(object,newdata,id,...){
+    form=as.formula(object$call[[2]])
+    mat=model.matrix(form,newdata)
+    coefi=coef(object,id=id)
+    xvars=names(coefi)
+    mat[,xvars]%*%coefi
+}
+k=10
+set.seed(5)
+folds=sample(1:k,nrow(data.train.std.c),replace=TRUE)
+cv.errors=matrix(NA,k,38, dimnames=list(NULL, paste(1:38)))
+for(j in 1:k){
+    best.fit=regsubsets(donr~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + chld*hinc + reg2*hinc,data=data.train.std.c[folds!=j,],nvmax=38)
+    for(i in 1:38){
+        pred=predict(best.fit,data.train.std.c[folds==j,],id=i)
+        cv.errors[j,i]=mean( (data.train.std.c$donr[folds==j]-pred)^2)
+    }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+mean.cv.errors
+
+# pick the number of variables to use
+which.min(mean.cv.errors)
+mean.cv.errors[14]
+
+# re-estimate the model using the training data and the number of variables selected
+par(mfrow=c(1,1))
+plot(mean.cv.errors,type='b')
+reg.best=regsubsets(donr~ . + I(hinc^2) + I(wrat^2) + reg2*wrat+ chld*I(hinc^2) + chld*hinc + reg2*hinc,data=data.train.std.c, nvmax=38)
+coef(reg.best,14)
+```
+
+### Logistic Regression
+
+Build multiple logistic regression models and compare their performance to select the best one(s). Use the selected variables from the Best Subset variable selection and Lasso variable selection each in separate models.
+
+```{r}
+#####################################
+### Logistic Regression - Model 1 ###
+#####################################
+
+# create the model using the training data set
+model.log1 <- glm(donr ~ ., data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+coef(model.log1)
+summary(model.log1)
+
+# predict outcomes for the validation  set
+pred.valid.log1 <- predict(model.log1, data.valid.std.c, type="response") # n.valid post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.log1 <- my.profit.function(pred.valid.log1,c.valid)
+my.data.log1
+
+#####################################
+### Logistic Regression - Model 2 ###
+#####################################
+
+# create the model using the training data set
+model.log2 <- glm(donr ~  . + I(hinc^2) + I(wrat^2) + reg2*wrat, data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+coef(model.log2)
+summary(model.log2)
+
+# predict outcomes for the validation  set
+pred.valid.log2 <- predict(model.log2, data.valid.std.c, type="response") # n.valid post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.log2 <- my.profit.function(pred.valid.log2,c.valid)
+my.data.log2
+
+######################################
+### Logistic Regression - Model 2b ###
+######################################
+
+# create the model using the training data set
+model.log2b <- glm(donr ~  reg1 + reg2 + home + chld + wrat + incm + tlag + chld_yes + h_tdon + I(hinc^2) + I(wrat^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+coef(model.log2b)
+summary(model.log2b)
+
+# predict outcomes for the validation  set
+pred.valid.log2b <- predict(model.log2b, data.valid.std.c, type="response") # n.valid post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.log2b <- my.profit.function(pred.valid.log2b,c.valid)
+my.data.log2b
+
+###########################################################################
+### Logistic Regression - Model 3 (variable selection from Best Subset) ###
+###########################################################################
+
+# create the model using the training data set
+model.log3 <- glm(donr ~ reg1 + reg2 + home + chld + wrat + incm + tgif + tlag + chld_yes + h_tdon + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+coef(model.log3)
+summary(model.log3)
+summary(model.log3)$coefficients
+
+# predict outcomes for the validation  set
+pred.valid.log3 <- predict(model.log3, data.valid.std.c, type="response") # n.valid post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.log3 <- my.profit.function(pred.valid.log3,c.valid)
+my.data.log3 
+
+#####################################################################
+### Logistic Regression - Model 4 (variable selection from Lasso) ###
+#####################################################################
+
+# create the model using the training data set
+model.log4 <- glm(donr ~ reg1 + reg2 + home + chld + wrat + incm + npro + tgif + tlag + chld_yes + h_tdon + h_tlag + I(hinc^2) + I(wrat^2) + chld*I(hinc^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+coef(model.log4)
+summary(model.log4)
+
+# predict outcomes for the validation  set
+pred.valid.log4 <- predict(model.log4, data.valid.std.c, type="response") # n.valid post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.log4 <- my.profit.function(pred.valid.log4,c.valid)
+my.data.log4 
+
+
+######################
+### Compare Models ###
+######################
+
+class.log.results <- cbind(my.data.log1, my.data.log2, my.data.log2b, my.data.log3, my.data.log4)
+class.log.results
+```
+
+### Linear Discriminant Analysis (LDA) Models
+
+Build multiple LDA models and compare their performance to select the best one(s). Use the selected variables from the Best Subset variable selection and Lasso variable selection each in separate models.
+
+```{r}
+# load necessary libraries
+library(MASS)
+
+##############################################
+### Linear Discriminant Analysis - Model 1 ###
+##############################################
+
+# create the model using the training data set
+model.lda1 <- lda(donr ~ . , data.train.std.c)
+
+# review model summary statistics
+model.lda1
+summary(model.lda1)
+plot(model.lda1)
+
+# predict outcomes for the validation  set
+post.valid.lda1 <- predict(model.lda1, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.lda1 <- my.profit.function(post.valid.lda1,c.valid)
+my.data.lda1
+
+##############################################
+### Linear Discriminant Analysis - Model 2 ###
+##############################################
+
+# create the model using the training data set
+model.lda2 <- lda(donr ~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c)
+
+# review model summary statistics
+model.lda2
+summary(model.lda2)
+plot(model.lda2)
+
+# predict outcomes for the validation  set
+post.valid.lda2 <- predict(model.lda2, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.lda2 <- my.profit.function(post.valid.lda2,c.valid)
+my.data.lda2
+
+###################################################################################
+### Linear Discriminant Analysis - Model 3 (variable selection from Best Subset) ##
+###################################################################################
+
+# create the model using the training data set
+model.lda3 <- lda(donr ~  reg1 + reg2 + home + chld + wrat + incm + tgif + tlag + chld_yes + h_tdon + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c)
+
+# review model summary statistics
+model.lda3
+summary(model.lda3)
+plot(model.lda3)
+
+# predict outcomes for the validation  set
+post.valid.lda3 <- predict(model.lda3, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.lda3 <- my.profit.function(post.valid.lda3,c.valid)
+my.data.lda3
+
+##############################################################################
+### Linear Discriminant Analysis - Model 4 (variable selection from Lasso) ###
+##############################################################################
+
+# create the model using the training data set
+model.lda4 <- lda(donr ~ reg1 + reg2 + home + chld + wrat + incm + inca + plow + npro + tgif + tlag + chld_yes + h_tdon + h_tlag + h_agif + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2), data.train.std.c)
+
+# review model summary statistics
+model.lda4
+summary(model.lda4)
+plot(model.lda4)
+
+# predict outcomes for the validation  set
+post.valid.lda4 <- predict(model.lda4, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.lda4 <- my.profit.function(post.valid.lda4,c.valid)
+my.data.lda4
+
+######################
+### Compare Models ###
+######################
+
+class.lda.results <- cbind(my.data.lda1, my.data.lda2, my.data.lda3, my.data.lda4)
+class.lda.results
+```
+
+### Quadratic Discriminant Analysis (LDA) Models
+
+Build multiple QDA models and compare their performance to select the best one(s). Use the selected variables from the Best Subset variable selection and Lasso variable selection each in separate models.
+
+```{r}
+# load necessary libraries
+library(MASS)
+
+#################################################
+### Quadratic Discriminant Analysis - Model 1 ###
+#################################################
+
+# create the model using the training data set
+model.qda1 <- qda(donr ~ . , data.train.std.c) # include additional terms on the fly using I()
+
+# review model summary statistics
+model.qda1
+summary(model.qda1)
+
+# predict outcomes for the validation  set
+post.valid.qda1 <- predict(model.qda1, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.qda1 <- my.profit.function(post.valid.qda1,c.valid)
+my.data.qda1
+
+#################################################
+### Quadratic Discriminant Analysis - Model 2 ###
+#################################################
+
+# create the model using the training data set
+model.qda2 <- qda(donr ~ . + I(hinc^2) + I(wrat^2) + + reg2*wrat + chld:I(hinc^2), data.train.std.c) # include additional terms on the fly using I()
+
+# review model summary statistics
+model.qda2
+summary(model.qda2)
+
+# predict outcomes for the validation  set
+post.valid.qda2 <- predict(model.qda2, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.qda2 <- my.profit.function(post.valid.qda2,c.valid)
+my.data.qda2
+
+########################################################################################
+### Quadratic Discriminant Analysis -  Model 3 (variable selection from Best Subset) ###
+########################################################################################
+
+# create the model using the training data set
+model.qda3 <- qda(donr ~ reg1 + reg2 + home + chld + wrat + incm + tgif + tlag + chld_yes + h_tdon + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c)
+
+
+# review model summary statistics
+model.qda3
+summary(model.qda3)
+
+# predict outcomes for the validation  set
+post.valid.qda3 <- predict(model.qda3, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.qda3 <- my.profit.function(post.valid.qda3,c.valid)
+my.data.qda3
+
+#################################################################################
+### Quadratic Discriminant Analysis - Model 4 (variable selection from Lasso) ###
+#################################################################################
+
+# create the model using the training data set
+model.qda4 <- qda(donr ~ reg1 + reg2 + home + chld + wrat + incm + inca + plow + npro + tgif + tlag + chld_yes + h_tdon + h_tlag + h_agif + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2), data.train.std.c)
+
+# review model summary statistics
+model.qda4
+summary(model.qda4)
+
+# predict outcomes for the validation  set
+post.valid.qda4 <- predict(model.qda4, data.valid.std.c)$posterior[,2] # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.qda4 <- my.profit.function(post.valid.qda4,c.valid)
+my.data.qda4
+
+######################
+### Compare Models ###
+######################
+
+class.qda.results <- cbind(my.data.qda1, my.data.qda2, my.data.qda3, my.data.qda4)
+class.qda.results
+```
+
+### General Additive Models (GAMs) for Regression
+
+Build multiple GAM regression models and compare their performance to select the best one(s). Use the selected variables from the Best Subset variable selection and Lasso variable selection each in separate models.
+
+```{r}
+# load necessary libraries
+library(gam)
+library(akima)
+
+########################################
+### General Additive Model - Model 1 ###
+########################################
+
+# create the model using the training data set
+model.gam1 <- gam(donr ~ ., data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+model.gam1
+summary(model.gam1)
+
+# predict outcomes for the validation  set
+post.valid.gam1 <- predict(model.gam1, data.valid.std.c, type="response") # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.gam1 <- my.profit.function(post.valid.gam1,c.valid)
+my.data.gam1
+
+########################################
+### General Additive Model - Model 2 ###
+########################################
+
+# create the model using the training data set
+model.gam2 <- gam(donr ~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+model.gam2
+summary(model.gam2)
+
+# predict outcomes for the validation  set
+post.valid.gam2 <- predict(model.gam2, data.valid.std.c, type="response") # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.gam2 <- my.profit.function(post.valid.gam2,c.valid)
+my.data.gam2
+
+##############################################################################
+### General Additive Model - Model 3 (variable selection from Best Subset) ###
+##############################################################################
+
+# create the model using the training data set
+model.gam3 <- gam(donr ~ reg1 + reg2 + home + chld + wrat + incm + tgif + tlag + chld_yes + h_tdon + I(hinc^2) + I(wrat^2) + reg2*wrat + chld:I(hinc^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+model.gam3
+summary(model.gam3)
+
+# predict outcomes for the validation  set
+post.valid.gam3 <- predict(model.gam3, data.valid.std.c, type="response") # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.gam3 <- my.profit.function(post.valid.gam3,c.valid)
+my.data.gam3
+
+########################################################################
+### General Additive Model - Model 4 (variable selection from Lasso) ###
+########################################################################
+
+# create the model using the training data set
+model.gam4 <- gam(donr ~ reg1 + reg2 + home + chld + wrat + incm + inca + plow + npro + tgif + tlag + chld_yes + h_tdon + h_tlag + h_agif + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2), data.train.std.c, family=binomial("logit"))
+
+# review model summary statistics
+model.gam4
+summary(model.gam4)
+
+# predict outcomes for the validation  set
+post.valid.gam4 <- predict(model.gam4, data.valid.std.c, type="response") # n.valid.c post probs
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.gam4 <- my.profit.function(post.valid.gam4,c.valid)
+my.data.gam4
+
+######################
+### Compare Models ###
+######################
+class.gam.results <- cbind(my.data.gam1, my.data.gam2, my.data.gam3, my.data.gam4)
+class.gam.results
+```
+
+### K-Nearest Neighbors Classification
+
+Use K-Nearest Neighbors to classify the validation data. Build models with all levels of k from 3 to 20 and compare performance to select the best model(s).
+
+```{r}
+# load necessary libraries
+library(class)
+
+# calculate the max profit for all levels of k from 3 to 20; create models with all local maxima
+my.profit <- c()
+set.seed(1)
+for (i in 3:20) {
+    pred.valid.knn <- knn(data.train.std.c, data.valid.std.c, c.train, k=i)
+    my.data.knn <- my.profit.function.2(pred.valid.knn, c.valid)
+    my.profit[i] <- my.data.knn$Max_Profit
+}
+plot(my.profit)
+lines(my.profit)
+
+#####################################
+### K-Nearest Neighbors - Model 1 ###
+#####################################
+
+# predict outcomes for the validation  set
+set.seed(1)
+pred.valid.knn1 <- knn(data.train.std.c, data.valid.std.c, c.train, k=5)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.knn1 <- my.profit.function.2(pred.valid.knn1, c.valid)
+my.data.knn1
+
+#####################################
+### K-Nearest Neighbors - Model 2 ###
+#####################################
+
+# predict outcomes for the validation  set
+set.seed(1)
+pred.valid.knn2 <- knn(data.train.std.c, data.valid.std.c, c.train, k=5)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.knn2 <- my.profit.function.2(pred.valid.knn2, c.valid)
+my.data.knn2
+
+#####################################
+### K-Nearest Neighbors - Model 3 ###
+#####################################
+
+# predict outcomes for the validation  set
+set.seed(1)
+pred.valid.knn3 <- knn(data.train.std.c, data.valid.std.c, c.train, k=11)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.knn3 <- my.profit.function.2(pred.valid.knn3, c.valid)
+my.data.knn3
+
+#####################################
+### K-Nearest Neighbors - Model 4 ###
+#####################################
+
+# predict outcomes for the validation  set
+set.seed(1)
+pred.valid.knn4 <- knn(data.train.std.c, data.valid.std.c, c.train, k=15)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.knn4 <- my.profit.function.2(pred.valid.knn4, c.valid)
+my.data.knn4
+
+######################
+### Compare Models ###
+######################
+
+class.knn.results <- cbind(my.data.knn1, my.data.knn2, my.data.knn3, my.data.knn4)
+class.knn.results
+```
+
+### Bagging & Random Forests
+
+Use bagging and random forests to try and improve the performance of the classification tree approach.
+
+```{r}
+# load necessary libraries
+library(randomForest)
+
+############################################
+### Bagged Classification Tree - Model 1 ###
+############################################
+
+# create the model using the training data set
+data.train.std.c.2 <- data.train.std.c
+data.train.std.c.2$donr <- as.factor(data.train.std.c.2$donr)
+set.seed(1)
+model.rf1 <- randomForest(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c.2, mtry=36, importance=TRUE)
+
+# review model summary statistics
+model.rf1
+importance(model.rf1)
+varImpPlot(model.rf1)
+
+# predict outcomes for the validation  set
+pred.rf1 <- predict(model.rf1,data.valid.std.c, type="class")
+my.data.rf1 <- my.profit.function.2(pred.rf1,c.valid)
+my.data.rf1
+
+###############################
+### Random Forest - Model 2 ###
+###############################
+
+# create the model using the training data set
+set.seed(1)
+model.rf2 <- randomForest(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c.2, mtry=6, importance=TRUE)
+
+# review model summary statistics
+model.rf2
+importance(model.rf2)
+varImpPlot(model.rf2)
+
+# predict outcomes for the validation  set
+pred.rf2 <- predict(model.rf2,data.valid.std.c, type="class")
+my.data.rf2 <- my.profit.function.2(pred.rf2,c.valid)
+my.data.rf2
+
+###############################
+### Random Forest - Model 3 ###
+###############################
+
+# create the model using the training data set
+set.seed(1)
+model.rf3 <- randomForest(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c.2, mtry=18, importance=TRUE)
+
+# review model summary statistics
+model.rf3
+importance(model.rf3)
+varImpPlot(model.rf3)
+
+# predict outcomes for the validation  set
+pred.rf3 <- predict(model.rf3,data.valid.std.c, type="class")
+my.data.rf3 <- my.profit.function.2(pred.rf3,c.valid)
+my.data.rf3
+
+######################
+### Compare Models ###
+######################
+class.rf.results <- cbind(my.data.rf1, my.data.rf2, my.data.rf3)
+class.rf.results
+```
+### Boosting
+
+Use boosting to try and improve the performance of the classification tree approach. Test performance with different shrinkage values and use the "dismo" package to do ntree selection.
+
+```{r}
+# load necessary libraries
+library(gbm)
+library(dismo)
+
+#############################################
+### Boosted Classification Tree - Model 1 ###
+#############################################
+
+# create the model using the training data set
+set.seed(1)
+model.boost1 <- gbm(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c , distribution="bernoulli", n.trees=5000, interaction.depth=4)
+
+# review model summary statistics
+model.boost1
+summary(model.boost1)
+plot(model.boost1, i = "chld")
+plot(model.boost1, i = "I(hinc^2)")
+plot(model.boost1, i = "reg2")
+
+# predict outcomes for the validation  set
+pred.boost1 <- predict(model.boost1, newdata=data.valid.std.c, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.boost1 <- my.profit.function(pred.boost1, c.valid)
+my.data.boost1
+
+#############################################
+### Boosted Classification Tree - Model 2 ###
+#############################################
+
+# create the model using the training data set
+set.seed(1)
+model.boost2 <- gbm(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c , distribution="bernoulli", n.trees=5000, interaction.depth=4, shrinkage=0.1,verbose=F)
+
+# review model summary statistics
+model.boost2
+summary(model.boost2)
+plot(model.boost2, i = "chld")
+plot(model.boost2, i = "I(hinc^2)")
+
+# predict outcomes for the validation  set
+pred.boost2 <- predict(model.boost2, newdata=data.valid.std.c, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.boost2 <- my.profit.function(pred.boost2, c.valid)
+my.data.boost2
+
+#############################################
+### Boosted Classification Tree - Model 3 ###
+#############################################
+
+# create the model using the training data set
+set.seed(1)
+model.boost3 <- gbm(donr~. + I(hinc^2) + I(wrat^2), data=data.train.std.c , distribution="bernoulli", n.trees=5000, interaction.depth=4, shrinkage=0.2,verbose=F)
+
+# review model summary statistics
+summary(model.boost3)
+plot(model.boost3, i = "chld")
+plot(model.boost3, i = "I(hinc^2)")
+
+# predict outcomes for the validation  set
+pred.boost3 <- predict(model.boost3, newdata=data.valid.std.c, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.boost3 <- my.profit.function(pred.boost3, c.valid)
+my.data.boost3
+
+#############################################
+### Boosted Classification Tree - Model 4 ###
+#############################################
+
+# create the model using the training data set
+set.seed(1)
+model.boost4 <- gbm.step(data=data.train.std.c, gbm.x = 1:34, gbm.y = 35, family="bernoulli", tree.complexity = 5, learning.rate = 0.01, bag.fraction = 0.5)
+
+# review model summary statistics
+summary(model.boost4)
+plot(model.boost4, i = "chld")
+plot(model.boost4, i = "hinc")
+
+# predict outcomes for the validation  set
+pred.boost4 <- predict(model.boost4, newdata=data.valid.std.c, n.trees=2950, type="response")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.boost4 <- my.profit.function(pred.boost4, c.valid)
+my.data.boost4
+
+######################
+### Compare Models ###
+######################
+class.boost.results <- cbind(my.data.boost1, my.data.boost2, my.data.boost3, my.data.boost4)
+class.boost.results
+```
+
+### Compare Results
+
+Compare the results of all classification methods to choose the final model. The best model, according to the predicted max profit on the validation data, is the Boosted Decision Tree model that used the gbm.step method to select the optimal number of trees.
+
+```{r}
+# compare N_Mail and Max_Profit results
+class.results <- cbind(class.boost.results,class.ctree.results,class.gam.results,class.knn.results,class.lasso.results,class.lda.results,class.log.results, class.qda.results,class.rf.results)
+class.results
+
+# select model.boost4 since it has maximum profit in the validation sample
+model.boost4
+summary(model.boost4)
+my.data.boost4
+
+# predict outcomes for the test data
+post.test <- predict(model.boost4, newdata=data.test.std, n.trees=2950, type = "response") # post probs for test data
+
+# oversampling adjustment for calculating number of mailings for test set
+n.mail.valid <- my.data.boost4$N_Mail
+tr.rate <- .1 # typical response rate is .1
+vr.rate <- .5 # whereas validation response rate is .5
+adj.test.1 <- (n.mail.valid/n.valid.c)/(vr.rate/tr.rate) # adjustment for mail yes
+adj.test.0 <- ((n.valid.c-n.mail.valid)/n.valid.c)/((1-vr.rate)/(1-tr.rate)) # adjustment for mail no
+adj.test <- adj.test.1/(adj.test.1+adj.test.0) # scale into a proportion
+n.mail.test <- round(n.test*adj.test, 0) # calculate number of mailings for test set
+
+cutoff.test <- sort(post.test, decreasing=T)[n.mail.test+1] # set cutoff based on n.mail.test
+chat.test <- ifelse(post.test>cutoff.test, 1, 0) # mail to everyone above the cutoff
+table(chat.test)
+# based on this model we'll mail to the 261 highest posterior probabilities
+```
+
+**********
+## BUILD REGRESSION MODELS
+
+Create a function to simplify model performance evalutation on validation data.
+
+```{r}
+my.mse.function <- function(pred, valid){
+    mse <- mean((valid - pred)^2) # mean prediction error
+    mse.sd <- sd((valid - pred)^2)/sqrt(length(valid))
+    return(list(MSE = mse, SD = mse.sd))
+}
+```
+
+### Regression Trees
+
+Use regression trees as an early variable selection approach and to look for possible interaction effects.
+
+```{r}
+# load necessary libraries
+library(tree)
+library(ISLR)
+
+#################################
+### Regression Tree - Model 1 ###
+#################################
+
+par(mfrow=c(1,1))
+# create the model using the training data set
+model.regtree1 <- tree(damt ~ . + I(hinc^2) + I(wrat^2), data.train.std.y)
+
+# review model summary statistics
+summary(model.regtree1)
+plot(model.regtree1)
+text(model.regtree1,pretty=0)
+model.regtree1
+```
+
+### Best Subset Selection for Regression
+
+Use best subset selection to do variable selection.
+
+```{r}
+# load necessary libraries
+library(leaps)
+
+#######################################
+### Best Subset Selection - Model 1 ###
+#######################################
+# predict outcomes for the validation  set
+predict.regsubsets=function(object,newdata,id,...){
+    form=as.formula(object$call[[2]])
+    mat=model.matrix(form,newdata)
+    coefi=coef(object,id=id)
+    xvars=names(coefi)
+    mat[,xvars]%*%coefi
+}
+
+# create the model using the training data set
+k=10
+set.seed(1)
+folds=sample(1:k,nrow(data.train.std.y),replace=TRUE)
+cv.errors=matrix(NA,k,30, dimnames=list(NULL, paste(1:30)))
+
+
+for(j in 1:k){
+    best.fit=regsubsets(damt~ . - h_rgif - h_tgif - h_lgif - h_agif,data=data.train.std.y[folds!=j,],nvmax=30)
+    for(i in 1:30){
+        pred=predict(best.fit,data.train.std.y[folds==j,],id=i)
+        cv.errors[j,i]=mean( (data.train.std.y$damt[folds==j]-pred)^2)
+    }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+mean.cv.errors
+which.min(mean.cv.errors)
+mean.cv.errors[18]
+plot(mean.cv.errors, type = "b", xlab = "Number of Predictors", ylab = "Mean CV Errors", main = "Best Subset Selection (10-fold CV)")
+points(18, mean.cv.errors[18], col = "blue", cex = 2, pch = 20)
+model.reg.best1 <- regsubsets(damt~ . - h_rgif - h_tgif - h_lgif - h_agif,data=data.train.std.y, nvmax=30)
+coef(model.reg.best1,18)
+
+# predict outcomes for the validation  set
+pred.regbest1 <- predict(model.reg.best1, data.valid.std.y, id = 18)
+
+# calculate MSE and SD of MSE
+my.data.regbest1 <- my.mse.function(pred.regbest1, y.valid)
+my.data.regbest1
+
+#######################################
+### Best Subset Selection - Model 2 ###
+#######################################
+# predict outcomes for the validation  set
+predict.regsubsets=function(object,newdata,id,...){
+    form=as.formula(object$call[[2]])
+    mat=model.matrix(form,newdata)
+    coefi=coef(object,id=id)
+    xvars=names(coefi)
+    mat[,xvars]%*%coefi
+}
+
+# create the model using the training data set
+k=10
+set.seed(1)
+folds=sample(1:k,nrow(data.train.std.y),replace=TRUE)
+cv.errors=matrix(NA,k,40, dimnames=list(NULL, paste(1:40)))
+
+for(j in 1:k){
+    best.fit=regsubsets(damt~ . - h_rgif - h_tgif - h_lgif - h_agif + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2),data=data.train.std.y[folds!=j,],nvmax=40)
+    for(i in 1:40){
+        pred=predict(best.fit,data.train.std.y[folds==j,],id=i)
+        cv.errors[j,i]=mean( (data.train.std.y$damt[folds==j]-pred)^2)
+    }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+mean.cv.errors
+which.min(mean.cv.errors)
+mean.cv.errors[16]
+plot(mean.cv.errors, type = "b", xlab = "Number of Predictors", ylab = "Mean CV Errors", main = "Best Subset Selection (10-fold CV)")
+points(16, mean.cv.errors[16], col = "blue", cex = 2, pch = 20)
+model.reg.best2 <- regsubsets(damt~ . - h_rgif - h_tgif - h_lgif - h_agif + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) +I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2),data=data.train.std.y, nvmax=40)
+coef(model.reg.best2,16)
+
+
+# predict outcomes for the validation  set
+pred.regbest2 <- predict(model.reg.best2, data.valid.std.y, id = 16)
+
+# calculate MSE and SD of MSE
+my.data.regbest2 <- my.mse.function(pred.regbest2, y.valid)
+my.data.regbest2
+
+######################
+### Compare Models ###
+######################
+
+regbest.results <- cbind(my.data.regbest1, my.data.regbest2)
+regbest.results
+```
+
+### Lasso Regression
+
+Use Lasso regression both to create a potential model and to conduct variable selection for possible OLS models and GAMs.
+
+```{r}
+# load necessary libraries
+library(glmnet)
+
+x <- model.matrix(damt~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + chld*lgif + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data.train.std.y)[,-1]
+y <- data.train.std.y$damt
+grid <- 10^seq(10, -2, length = 100)
+lasso.mod <- glmnet(x, y, alpha = 1, lambda = grid, thresh = 1e-12)
+plot(lasso.mod, xvar = "lambda", label = TRUE)
+
+#######################
+### Lasso - Model 1 ###
+#######################
+
+set.seed(1)
+cv.out=cv.glmnet(x, y,alpha=1)
+plot(cv.out)
+bestlam1 <- cv.out$lambda.min
+bestlam1
+log(bestlam1)
+x.valid.std.1 <- model.matrix(damt~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) +  chld*lgif + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data.valid.std.y)[,-1]
+model.reg.lasso1 <- glmnet(x, y, alpha = 1, lambda = bestlam1)
+pred.reg.lasso1 <- predict(model.reg.lasso1, s = bestlam1, newx = x.valid.std.1)
+
+my.data.reg.lasso1 <- my.mse.function(pred.reg.lasso1, y.valid)
+my.data.reg.lasso1
+
+lasso.coef=predict(model.reg.lasso1,type="coefficients",s=bestlam1)[1:46,]
+lasso.coef[lasso.coef!=0]
+
+#######################
+### Lasso - Model 2 ###
+#######################
+
+set.seed(5)
+cv.out=cv.glmnet(x, y,alpha=1)
+plot(cv.out)
+bestlam2 <- cv.out$lambda.1se
+bestlam2
+log(bestlam2)
+x.valid.std.2 <- model.matrix(damt~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + chld*lgif + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data.valid.std.y)[,-1]
+model.reg.lasso2 <- glmnet(x, y, alpha = 1, lambda = bestlam2)
+pred.reg.lasso2 <- predict(model.reg.lasso2, s = bestlam2, newx = x.valid.std.2)
+
+my.data.reg.lasso2 <- my.mse.function(pred.reg.lasso2, y.valid)
+my.data.reg.lasso2
+
+lasso.coef=predict(model.reg.lasso2,type="coefficients",s=bestlam2)[1:46,]
+lasso.coef[lasso.coef!=0]
+
+######################
+### Compare Models ###
+######################
+
+reg.lasso.results <- cbind(my.data.reg.lasso1,my.data.reg.lasso2)
+reg.lasso.results
+
+```
+
+### Ridge Regression Model
+
+Model the donation amount using Ridge Regression.
+
+```{r}
+library(glmnet)
+
+##########################################
+### Ridge Regression with CV - Model 1 ###
+##########################################
+
+x=model.matrix(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif,data.train.std.y)[,-1]
+y=data.train.std.y$damt
+ridge.mod <- glmnet(x, y, alpha = 0, lambda = grid, thresh = 1e-12)
+plot(ridge.mod, xvar = "lambda", label = TRUE)
+
+# create the model using the training data set
+set.seed(1)
+cv.out <- cv.glmnet(x,y,alpha=0)
+plot(cv.out)
+bestlam1 <- cv.out$lambda.min
+bestlam1
+log(bestlam1)
+model.ridge1 <- glmnet(x,y, alpha = 0, lambda = bestlam1)
+predict(model.ridge1, type = "coefficients", s = bestlam1)[1:46,]
+
+# predict outcomes for the validation  set
+x.valid.1=model.matrix(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif,data.valid.std.y)[,-1]
+pred.ridge1 <- predict(model.ridge1, s= bestlam1, newx = x.valid.1)
+
+#calculate MSE and SE of MSE
+my.data.ridge1 <- my.mse.function(pred.ridge1, y.valid)
+my.data.ridge1
+
+##########################################
+### Ridge Regression with CV - Model 2 ###
+##########################################
+
+# create the model using the training data set
+set.seed(1)
+cv.out <- cv.glmnet(x,y,alpha=0)
+plot(cv.out)
+bestlam2 <- cv.out$lambda.1se
+bestlam2
+log(bestlam2)
+model.ridge2 <- glmnet(x,y, alpha = 0, lambda = bestlam2)
+predict(model.ridge2, type = "coefficients", s = bestlam2)[1:46,]
+
+# predict outcomes for the validation  set
+x.valid.2=model.matrix(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif,data.valid.std.y)[,-1]
+pred.ridge2 <- predict(model.ridge2, s= bestlam2, newx = x.valid.2)
+
+#calculate MSE and SE of MSE
+my.data.ridge2 <- my.mse.function(pred.ridge2, y.valid)
+my.data.ridge2
+
+
+######################
+### Compare Models ###
+######################
+
+reg.ridge.results <- cbind(my.data.ridge1, my.data.ridge2)
+reg.ridge.results
+
+```
+
+
+
+### Linear Regression Models
+
+Create multiple linear regression models using the full set of predictors and the subsets chosen by the best subset and lasso methods in order to chose the one(s) that perform the best.
+
+```{r}
+##########################################
+### Least Squares Regression - Model 1 ###
+##########################################
+
+# create the model using the training data set
+model.ls0 <- lm(damt ~ reg3 + reg4 + home + chld + tgif + rgif + tdon + incm +rr +app, data.train.std.y)
+
+# review model summary statistics
+summary(model.ls0)
+
+# predict outcomes for the validation  set
+pred.valid.ls0 <- predict(model.ls0, newdata = data.valid.std.y) # validation predictions
+
+# calculate MSE & SE
+my.data.ls0 <- my.mse.function(pred.valid.ls0,y.valid)
+my.data.ls0
+
+##########################################
+### Least Squares Regression - Model 1 ###
+##########################################
+
+# create the model using the training data set
+model.ls1 <- lm(damt ~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif, data.train.std.y)
+
+# review model summary statistics
+summary(model.ls1)
+
+# predict outcomes for the validation  set
+pred.valid.ls1 <- predict(model.ls1, newdata = data.valid.std.y) # validation predictions
+
+# calculate MSE & SE
+my.data.ls1 <- my.mse.function(pred.valid.ls1,y.valid)
+my.data.ls1
+
+##########################################
+### Least Squares Regression - Model 2 ###
+##########################################
+
+# create the model using the training data set
+model.ls2 <- lm(damt ~ reg3 + reg4 + home + chld + hinc + genf + wrat + incm + lgif + rgif + tdon + agif + h_inca + I(wrat^2) + I(tgif^2) + I(lgif^2) + I(inca^2), data.train.std.y)
+
+# review model summary statistics
+summary(model.ls2)
+
+# predict outcomes for the validation  set
+pred.valid.ls2 <- predict(model.ls2, newdata = data.valid.std.y) # validation predictions
+
+# calculate MSE & SE
+my.data.ls2 <- my.mse.function(pred.valid.ls2,y.valid)
+my.data.ls2
+
+################################################################################
+### Least Squares Regression - Model 3 (Best Subset for variable  selection) ###
+################################################################################
+
+# create the model using the training data set
+model.ls3 <- lm(damt ~ reg3 + reg4 + home + chld + hinc + wrat + avhv + incm + tgif + lgif + rgif + agif + I(hinc^2) + I(wrat^2) + I(lgif^2) + I(inca^2), data.train.std.y)
+
+# review model summary statistics
+summary(model.ls3)
+
+# predict outcomes for the validation  set
+pred.valid.ls3 <- predict(model.ls3, newdata = data.valid.std.y) # validation predictions
+
+# calculate MSE & SE
+my.data.ls3 <- my.mse.function(pred.valid.ls3,y.valid)
+my.data.ls3
+
+#########################################################################
+### Least Squares Regression - Model 4 (Lasso variable selection 1se) ###
+#########################################################################
+
+# create the model using the training data set
+model.ls4 <- lm(damt ~ reg2 + reg3 + reg4 + home + chld + hinc + wrat + incm + tgif + lgif + rgif + agif + I(wrat^2) + I(incm^2) + I(agif^2) + I(rgif^2) + I(inca^2) + chld*lgif, data.train.std.y)
+
+# review model summary statistics
+summary(model.ls4)
+
+# predict outcomes for the validation  set
+pred.valid.ls4 <- predict(model.ls4, newdata = data.valid.std.y) # validation predictions
+
+# calculate MSE & SE
+my.data.ls4 <- my.mse.function(pred.valid.ls4,y.valid)
+my.data.ls4
+
+######################
+### Compare Models ###
+######################
+
+reg.ls.results <- cbind(my.data.ls1, my.data.ls2, my.data.ls3, my.data.ls4)
+reg.ls.results 
+```
+
+### General Additive Models for Regression
+
+Create multiple GAMs using the full set of predictors and the subsets chosen by the best subset and lasso methods in order to chose the one(s) that perform the best.
+
+```{r}
+# load necessary libraries
+library(gam)
+library(akima)
+
+########################################
+### General Additive Model - Model 1 ###
+########################################
+
+# create the model using the training data set
+model.reg.gam1 <- gam(damt ~ . + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif, data.train.std.y, family="gaussian")
+
+# review model summary statistics
+model.reg.gam1
+summary(model.reg.gam1)
+
+# predict outcomes for the validation  set
+pred.reg.gam1 <- predict(model.reg.gam1, data.valid.std.y, type="response") 
+
+# calculate MSE
+my.data.reg.gam1 <- my.mse.function(pred.reg.gam1,y.valid)
+my.data.reg.gam1
+
+########################################
+### General Additive Model - Model 2 ###
+########################################
+
+# create the model using the training data set
+model.reg.gam2 <- gam(damt ~ reg3 + reg4 + home + chld + hinc + wrat + avhv + incm + tgif + lgif + rgif + agif + I(hinc^2) + I(wrat^2) + I(lgif^2) + I(inca^2), data.train.std.y, family="gaussian")
+
+# review model summary statistics
+model.reg.gam2
+summary(model.reg.gam2)
+
+# predict outcomes for the validation  set
+pred.reg.gam2 <- predict(model.reg.gam2, data.valid.std.y, type="response")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.gam2 <- my.mse.function(pred.reg.gam2,y.valid)
+my.data.reg.gam2
+
+########################################
+### General Additive Model - Model 3 ###
+########################################
+
+# create the model using the training data set
+model.reg.gam3 <- gam(damt ~ reg3 + reg4 + home + chld + hinc + wrat + incm + tgif + rgif + agif + I(hinc^2) + I(wrat^2) + I(lgif^2) + I(inca^2), data.train.std.y, family="gaussian")
+
+# review model summary statistics
+model.reg.gam3
+summary(model.reg.gam3)
+
+# predict outcomes for the validation  set
+pred.reg.gam3 <- predict(model.reg.gam3, data.valid.std.y, type="response")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.gam3 <- my.mse.function(pred.reg.gam3,y.valid)
+my.data.reg.gam3
+
+########################################
+### General Additive Model - Model 4 ###
+########################################
+
+# create the model using the training data set
+model.reg.gam4 <- gam(damt ~ reg2 + reg3 + reg4 + home + chld + hinc + wrat + incm + tgif + lgif + rgif + agif + I(wrat^2) + I(incm^2) + I(agif^2) + I(rgif^2) + I(inca^2) + chld*lgif, data.train.std.y, family="gaussian")
+
+# review model summary statistics
+model.reg.gam4
+summary(model.reg.gam4)
+
+# predict outcomes for the validation  set
+pred.reg.gam4 <- predict(model.reg.gam4, data.valid.std.y, type="response") 
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.gam4 <- my.mse.function(pred.reg.gam4,y.valid)
+my.data.reg.gam4
+
+######################
+### Compare Models ###
+######################
+reg.gam.results <- cbind(my.data.reg.gam1, my.data.reg.gam2, my.data.reg.gam3, my.data.reg.gam4)
+reg.gam.results
+```
+
+### Principal Components Regression
+
+Create PCR models to test whether the variance of DAMT can be explained with a smaller set of principal components.
+
+```{r}
+# load necessary libraries
+library(pls)
+
+#################################################
+### Principal Components Regression - Model 1 ###
+#################################################
+set.seed(1)
+model.pcr1 <- pcr(damt ~ . +I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y, scale=TRUE, validation="CV")
+summary(model.pcr1)
+par(mfrow=c(1,1))
+validationplot(model.pcr1,val.type="MSEP")
+pred.valid.std.pcr1 <- predict(model.pcr1, data.valid.std.y, ncomp = 18) # validation predictions
+
+my.data.pcr1 <- my.mse.function(pred.valid.std.pcr1,y.valid)
+my.data.pcr1
+
+pcr.fit=pcr(damt ~ .+ I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data = data.train.std.y, scale=TRUE, ncomp=22)
+summary(pcr.fit)
+
+#################################################
+### Principal Components Regression - Model 2 ###
+#################################################
+
+set.seed(1)
+model.pcr2 <- pcr(damt ~ . , data=data.train.std.y, scale=TRUE, validation="CV")
+summary(model.pcr2)
+par(mfrow=c(1,1))
+validationplot(model.pcr2,val.type="MSEP")
+pred.valid.std.pcr2 <- predict(model.pcr2, data.valid.std.y, ncomp = 18) # validation predictions
+
+my.data.pcr2 <- my.mse.function(pred.valid.std.pcr2,y.valid)
+my.data.pcr2
+
+pcr.fit=pcr(damt ~ .+ I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2), data = data.train.std.y, scale=FALSE, ncomp=18)
+summary(pcr.fit)
+
+######################
+### Compare Models ###
+######################
+
+reg.pcr.results <- cbind(my.data.pcr1, my.data.pcr2)
+reg.pcr.results
+```
+
+### Partial Least Squares Regression
+
+Use PLS regression to model DAMT.
+
+```{r}
+# load necessary libraries
+library(pls)
+
+#######################################
+### Partial Least Squares - Model 1 ###
+#######################################
+set.seed(1)
+pls.fit1 <- plsr(damt~., data=data.train.std.y,scale=FALSE, validation="CV")
+summary(pls.fit1)
+validationplot(pls.fit1,val.type="MSEP")
+pls.pred1 <- predict(pls.fit1,data.valid.std.y,ncomp=5)
+my.data.pls1 <- my.mse.function(pls.pred1, y.valid)
+my.data.pls1
+pls.fit1 <- plsr(damt~., data=data.train.std.y,scale=FALSE,ncomp=5)
+summary(pls.fit1)
+
+reg.pls.results <- cbind(my.data.pls1)
+reg.pls.results
+
+#######################################
+### Partial Least Squares - Model 2 ###
+#######################################
+set.seed(1)
+pls.fit2 <- plsr(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2) + chld*lgif, data=data.train.std.y,scale=FALSE, validation="CV")
+summary(pls.fit2)
+pls.pred2 <- predict(pls.fit2,data.valid.std.y,ncomp=7)
+validationplot(pls.fit2,val.type="MSEP")
+my.data.pls2 <- my.mse.function(pls.pred2, y.valid)
+my.data.pls2
+pls.fit2 <- plsr(damt~., data=data.train.std.y,scale=FALSE,ncomp=7)
+summary(pls.fit2)
+
+reg.pls.results <- cbind(my.data.pls1, my.data.pls2)
+reg.pls.results
+```
+
+### Bagging & Random Forests
+
+```{r}
+# load necessary libraries
+library(randomForest)
+
+########################################
+### Bagged Regression Tree - Model 1 ###
+########################################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.rf1 <- randomForest(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y, mtry=45, importance=TRUE)
+
+# review model summary statistics
+model.reg.rf1
+importance(model.reg.rf1)
+varImpPlot(model.reg.rf1)
+
+# predict outcomes for the validation  set
+pred.reg.rf1 <- predict(model.reg.rf1,data.valid.std.y, type="response")
+my.data.reg.rf1 <- my.mse.function(pred.reg.rf1,y.valid)
+my.data.reg.rf1
+
+###############################
+### Random Forest - Model 2 ###
+###############################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.rf2 <- randomForest(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y, mtry=6, importance=TRUE)
+
+# review model summary statistics
+model.reg.rf2
+importance(model.reg.rf2)
+varImpPlot(model.reg.rf2)
+
+# predict outcomes for the validation  set
+pred.reg.rf2 <- predict(model.reg.rf2,data.valid.std.y, type="response")
+my.data.reg.rf2 <- my.mse.function(pred.reg.rf2,y.valid)
+my.data.reg.rf2
+
+###############################
+### Random Forest - Model 3 ###
+###############################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.rf3 <- randomForest(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y, mtry=18, importance=TRUE)
+
+# review model summary statistics
+model.reg.rf3
+importance(model.reg.rf3)
+varImpPlot(model.reg.rf3)
+
+# predict outcomes for the validation  set
+pred.reg.rf3 <- predict(model.reg.rf3,data.valid.std.y, type="response")
+my.data.reg.rf3 <- my.mse.function(pred.reg.rf3,y.valid)
+my.data.reg.rf3
+
+######################
+### Compare Models ###
+######################
+reg.rf.results <- cbind(my.data.reg.rf1, my.data.reg.rf2, my.data.reg.rf3)
+reg.rf.results
+```
+
+### Boosting
+
+```{r}
+# load necessary libraries
+library(gbm)
+
+#########################################
+### Boosted Regression Tree - Model 1 ###
+#########################################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.boost1 <- gbm(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y , distribution="gaussian", n.trees=5000, interaction.depth=4)
+
+# review model summary statistics
+model.reg.boost1
+summary(model.reg.boost1)
+plot(model.reg.boost1, i = "rgif")
+plot(model.reg.boost1, i = "lgif")
+plot(model.reg.boost1, i = "agif")
+
+# predict outcomes for the validation  set
+pred.reg.boost1 <- predict(model.reg.boost1, newdata=data.valid.std.y, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.boost1 <- my.mse.function(pred.reg.boost1, y.valid)
+my.data.reg.boost1
+
+#########################################
+### Boosted Regression Tree - Model 2 ###
+#########################################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.boost2 <- gbm(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y, distribution="gaussian", n.trees=5000, interaction.depth=4, shrinkage=0.1,verbose=F)
+
+# review model summary statistics
+model.reg.boost2
+summary(model.reg.boost2)
+plot(model.reg.boost2, i = "rgif")
+plot(model.reg.boost2, i = "lgif")
+plot(model.reg.boost2, i = "agif")
+
+# predict outcomes for the validation  set
+pred.reg.boost2 <- predict(model.reg.boost2, newdata=data.valid.std.y, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.boost2 <- my.mse.function(pred.reg.boost2, y.valid)
+my.data.reg.boost2
+
+#########################################
+### Boosted Regression Tree - Model 3 ###
+#########################################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.boost3 <- gbm(damt~. + I(hinc^2) + I(wrat^2) + reg2*wrat + chld*I(hinc^2) + I(incm^2) + I(tgif^2) + I(lgif^2) + I(agif^2) +I(rgif^2) + I(inca^2), data=data.train.std.y , distribution="gaussian", n.trees=5000, interaction.depth=4, shrinkage=0.2,verbose=F)
+
+# review model summary statistics
+model.reg.boost3
+summary(model.reg.boost3)
+plot(model.reg.boost3, i = "rgif")
+plot(model.reg.boost3, i = "lgif")
+plot(model.reg.boost3, i = "agif")
+
+# predict outcomes for the validation  set
+pred.reg.boost3 <- predict(model.reg.boost3, newdata=data.valid.std.y, n.trees=5000)
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.boost3 <- my.mse.function(pred.reg.boost3, y.valid)
+my.data.boost3
+
+#########################################
+### Boosted Regression Tree - Model 4 ###
+#########################################
+
+# create the model using the training data set
+set.seed(1)
+model.reg.boost4 <- gbm.step(data=data.train.std.y, gbm.x = 1:34, gbm.y = 35, family="gaussian", tree.complexity = 5, learning.rate = 0.01, bag.fraction = 0.5)
+
+# review model summary statistics
+summary(model.reg.boost4)
+plot(model.reg.boost4, i = "rgif")
+plot(model.reg.boost4, i = "lgif")
+plot(model.reg.boost4, i = "agif")
+
+# predict outcomes for the validation  set
+pred.reg.boost4 <- predict(model.reg.boost4, newdata=data.valid.std.y, n.trees=1050, type="response")
+
+# calculate ordered profit function using average donation = $14.50 and mailing cost = $2
+my.data.reg.boost4 <- my.mse.function(pred.reg.boost4, y.valid)
+my.data.reg.boost4
+
+######################
+### Compare Models ###
+######################
+reg.boost.results <- cbind(my.data.reg.boost1, my.data.reg.boost2, my.data.reg.boost3, my.data.reg.boost4)
+reg.boost.results
+```
+
+## COMPARE & SELECT MODELS
+
+```{r}
+# compare N_Mail and Max_Profit results
+reg.results <- cbind(reg.boost.results, reg.lasso.results, reg.ls.results, reg.pcr.results, reg.pls.results, reg.rf.results, reg.ridge.results, regbest.results, reg.gam.results)
+reg.results
+
+# select model.boost4 since it has maximum profit in the validation sample
+model.reg.boost4
+summary(model.reg..boost4)
+my.data.reg.boost4
+
+# predict outcomes for the test data
+yhat.test <- predict(model.reg.boost4, newdata = data.test.std, n.trees=1050, type="response") # test predictions
+```
+
+## FINAL RESULTS
+
+Save final results for both classification and regression
+
+```{r}
+# 
+length(chat.test) # check length = 2007
+length(yhat.test) # check length = 2007
+chat.test[1:10] # check this consists of 0s and 1s
+yhat.test[1:10] # check this consists of plausible predictions of damt
+
+ip <- data.frame(chat=chat.test, yhat=yhat.test) # data frame with two variables: chat and yhat
+write.csv(ip, file="CMM.csv", row.names=FALSE) # use your initials for the file name
+
+# submit the csv file in Canvas for evaluation based on actual test donr and damt values
+```
+
